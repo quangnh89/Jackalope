@@ -55,6 +55,8 @@ class CoverageClient;
 
 #define MIN_SAMPLES_TO_GENERATE 10
 
+#define MAX_ATTEMPT 10
+#define ATTEMPT_WAIT 5000
 class Fuzzer {
 public:
   void Run(int argc, char **argv);
@@ -81,6 +83,7 @@ public:
     std::vector<Sample *> all_samples_local;
     
     bool coverage_initialized;
+    char* module_name;
 
     ~ThreadContext();
   };
@@ -188,6 +191,7 @@ protected:
   void JobDone(FuzzerJob* job);
   void FuzzJob(ThreadContext* tc, FuzzerJob* job);
   void ProcessSample(ThreadContext* tc, FuzzerJob* job);
+  bool FindProcessId(char* moduleName, unsigned int* pid);
 
   uint64_t num_crashes;
   uint64_t num_unique_crashes;
@@ -257,4 +261,6 @@ protected:
   uint64_t last_save_time;
   
   SampleTrie sample_trie;
+private:
+  bool FindProcessModule(DWORD pid, char* moduleName);
 };

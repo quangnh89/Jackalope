@@ -29,6 +29,7 @@ limitations under the License.
 #include "directory.h"
 #include "client.h"
 #include "mersenne.h"
+#include <TlHelp32.h>
 
 using namespace std;
 
@@ -246,8 +247,23 @@ RunResult Fuzzer::RunSampleAndGetCoverage(ThreadContext *tc, Sample *sample, Cov
     }
   }
 
-  RunResult result = tc->instrumentation->Run(tc->target_argc, tc->target_argv, init_timeout, timeout);
-  tc->instrumentation->GetCoverage(*coverage, true);
+  RunResult result = OK;
+  if (tc->module_name) {
+    for (int attempt_counter = 0; attempt_counter < MAX_ATTEMPT; ++attempt_counter) {
+      unsigned int pid = 0;
+      if (!FindProcessId(tc->module_name, &pid)) {
+        result = OTHER_ERROR;
+        Sleep(ATTEMPT_WAIT);
+      } else {
+        result = tc->instrumentation->Attach(pid, init_timeout, timeout);
+        tc->instrumentation->GetCoverage(*coverage, true);
+        break;
+      }
+    } 
+  } else {
+    result = tc->instrumentation->Run(tc->target_argc, tc->target_argv, init_timeout, timeout);
+    tc->instrumentation->GetCoverage(*coverage, true);
+  }
 
   // save crashes and hangs immediately when they are detected
   if (result == CRASH) {
@@ -612,7 +628,7 @@ void Fuzzer::SynchronizeAndGetJob(ThreadContext* tc, FuzzerJob* job) {
 
   if ((state == FUZZING) && (num_samples == 0)) {
     if (tc->mutator->CanGenerateSample()) {
-      printf("Sample queue is empty, but the mutatator supports sample generation\n");
+      printf("Sample queue is empty, but the mutator supports sample generation\n");
       printf("Will try to generate initial samples\n");
       state = GENERATING_SAMPLES;
     } else {
@@ -769,6 +785,30 @@ void Fuzzer::ProcessSample(ThreadContext* tc, FuzzerJob* job) {
   }
 }
 
+bool Fuzzer::FindProcessId(char* moduleName, unsigned int* pid) {
+  bool ret = false;
+  HANDLE hFind = INVALID_HANDLE_VALUE;
+  PROCESSENTRY32 pe = {};
+  pe.dwSize = sizeof(PROCESSENTRY32);
+  hFind = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if (hFind == INVALID_HANDLE_VALUE)
+    return false;
+  if (Process32First(hFind, &pe)) {
+    do {
+      if (pe.th32ProcessID <= 4)
+        continue;
+      if (FindProcessModule(pe.th32ProcessID, moduleName)) {
+        *pid = (unsigned int)pe.th32ProcessID;
+        ret = true;
+        break;
+      }
+    } while (Process32Next(hFind, &pe));
+  }
+
+  CloseHandle(hFind);
+  return ret;
+}
+
 void Fuzzer::RunFuzzerThread(ThreadContext *tc) {
   while (1) {
     FuzzerJob job;
@@ -900,6 +940,28 @@ void Fuzzer::RestoreState(ThreadContext *tc) {
   output_mutex.Unlock();
 }
 
+bool Fuzzer::FindProcessModule(DWORD pid, char* moduleName) {
+  bool ret = false;
+  HANDLE hFind = INVALID_HANDLE_VALUE;
+  MODULEENTRY32 me = {};
+  me.dwSize = sizeof(MODULEENTRY32);
+  hFind = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, pid);
+  if (hFind == INVALID_HANDLE_VALUE)
+    return false;
+
+  if (Module32First(hFind, &me)) {
+    do {
+      if (stricmp(me.szModule, moduleName) == 0) {
+        ret = true;
+        break;
+      }
+    } while (Module32Next(hFind, &me));
+  }
+
+  CloseHandle(hFind);
+  return ret;
+}
+
 void Fuzzer::AdjustSamplePriority(ThreadContext *tc, SampleQueueEntry *entry, int found_new_coverage) {
   if (found_new_coverage) entry->priority = 0;
   else entry->priority--;
@@ -925,6 +987,13 @@ Fuzzer::ThreadContext *Fuzzer::CreateThreadContext(int argc, char **argv, int th
   tc->minimizer = CreateMinimizer(argc, argv, tc);
   tc->range_tracker = CreateRangeTracker(argc, argv, tc);
   tc->coverage_initialized = false;
+  char* module_name = GetOption("-module", argc, argv);
+  if (module_name) {
+    tc->module_name = strdup(module_name);
+  }
+  else {
+    tc->module_name = NULL;
+  }
   
   return tc;
 }
