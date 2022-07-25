@@ -293,7 +293,7 @@ int Grammar::Read(const char *filename) {
     return 0;
   }
   int ret = 1;
-  int lineno = 0;
+  int lineno = 1;
   while (getline(file, line)) {
     if (!ParseGrammarLine(line, lineno)) {
       ret = 0;
